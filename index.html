@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1d4f7c">
+<title>Crash Barrier Production & Dispatch</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="32x32" href="icon-32.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="CB Production">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* Layout idea: plant control-room board. Summary tiles first, then stock and orders tables.
+   Desktop = top tabs with data entry; phone = bottom tab bar, monitoring only. */
+:root {
+  --bg: #eef1f3;
+  --surface: #ffffff;
+  --ink: #15191c;
+  --muted: #5b646b;
+  --line: #d6dce1;
+  --accent: #1d5f9a;
+  --accent-soft: #e3edf7;
+  --hi: #e0a100;
+  --good: #0a7d0a;
+  --good-bg: #e2f3e2;
+  --warn: #8a5a00;
+  --warn-bg: #fdf0d2;
+  --bad: #c22f2f;
+  --bad-bg: #fbe3e3;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;
+  --font-display: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111416; --surface: #1a1f22; --ink: #eef1f3; --muted: #a3adb4; --line: #2f373c;
+    --accent: #6aa8e6; --accent-soft: #1d2e3f; --hi: #f0b429;
+    --good: #4cc24c; --good-bg: #16301a; --warn: #f0b429; --warn-bg: #3a2e10; --bad: #ef7272; --bad-bg: #3d1c1c;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111416; --surface: #1a1f22; --ink: #eef1f3; --muted: #a3adb4; --line: #2f373c;
+  --accent: #6aa8e6; --accent-soft: #1d2e3f; --hi: #f0b429;
+  --good: #4cc24c; --good-bg: #16301a; --warn: #f0b429; --warn-bg: #3a2e10; --bad: #ef7272; --bad-bg: #3d1c1c;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-body); -webkit-text-size-adjust: 100%; }
+h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing: .01em; margin: 0; text-wrap: balance; }
+h2 { font-size: 22px; }
+h3 { font-size: 18px; }
+.num, td.n, th.n { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Top bar */
+header.top { background: var(--surface); border-bottom: 3px solid var(--hi); padding: 12px max(16px, env(safe-area-inset-left)) 0; padding-top: max(12px, env(safe-area-inset-top)); position: sticky; top: 0; z-index: 20; }
+.brand { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: space-between; }
+.brand h1 { font-size: 24px; line-height: 1.1; }
+.brand .sub { color: var(--muted); font-size: 13px; }
+button.chip { cursor: pointer; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; border: 1px solid var(--line); background: var(--bg); color: var(--muted); }
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.chip.live .dot { background: var(--good); }
+.chip.err .dot { background: var(--bad); }
+nav.tabs { display: flex; gap: 2px; margin-top: 10px; overflow-x: auto; }
+nav.tabs a { padding: 9px 14px; text-decoration: none; color: var(--muted); font-weight: 500; border-bottom: 3px solid transparent; margin-bottom: -3px; white-space: nowrap; }
+nav.tabs a:hover { color: var(--ink); }
+nav.tabs a.on { color: var(--accent); border-bottom-color: var(--accent); }
+nav.bottom { display: none; }
+
+main { padding: 18px max(16px, env(safe-area-inset-right)) 40px max(16px, env(safe-area-inset-left)); max-width: 1320px; margin: 0 auto; }
+.view { display: none; flex-direction: column; gap: 18px; }
+.view.on { display: flex; }
+.bar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; justify-content: space-between; }
+.bar .left, .bar .right { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 16px; }
+.panel > h3 { margin-bottom: 10px; }
+.panel-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+
+/* Tiles */
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; border-top: 4px solid var(--tc, var(--accent)); }
+.tile .lbl { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+.tile .big { font-family: var(--font-display); font-size: 34px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+.tile .big small { font-size: 16px; color: var(--muted); font-weight: 500; margin-left: 3px; }
+.tile .row2 { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tile .row2 b { color: var(--ink); font-weight: 600; }
+
+.grid2 { display: grid; grid-template-columns: 1.35fr 1fr; gap: 18px; align-items: start; }
+
+/* Tables */
+.tw { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+th { font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; background: var(--surface); position: sticky; top: 0; }
+tr.grp td { background: var(--accent-soft); font-weight: 600; font-family: var(--font-display); font-size: 15px; letter-spacing: .02em; }
+tr.tot td { font-weight: 600; border-top: 2px solid var(--ink); }
+tbody tr:hover td { background: color-mix(in srgb, var(--accent-soft) 45%, transparent); }
+tr.grp:hover td { background: var(--accent-soft); }
+.pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.p-good { background: var(--good-bg); color: var(--good); }
+.p-warn { background: var(--warn-bg); color: var(--warn); }
+.p-bad { background: var(--bad-bg); color: var(--bad); }
+.p-mute { background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
+.p-black { background: #2b3136; color: #fff; }
+.p-galv { background: var(--accent-soft); color: var(--accent); }
+.p-disp { background: var(--good-bg); color: var(--good); }
+.p-rec { background: var(--warn-bg); color: var(--warn); }
+.p-adj { background: var(--bad-bg); color: var(--bad); }
+.prog { height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; min-width: 70px; border: 1px solid var(--line); }
+.prog > i { display: block; height: 100%; background: var(--accent); }
+
+/* Forms */
+label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); font-weight: 500; }
+input[type=text], input[type=number], input[type=date], input[type=month], select, textarea { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; min-height: 36px; color: var(--ink); }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+#e-veh { text-transform: uppercase; }
+input.q { width: 100px; text-align: right; font-variant-numeric: tabular-nums; }
+input.q.filled { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+input.q.over { border-color: var(--bad); background: var(--bad-bg); }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 8px 14px; cursor: pointer; font-weight: 500; min-height: 36px; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn.pri { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.pri:hover { filter: brightness(1.08); color: #fff; }
+.btn.sm { padding: 4px 10px; min-height: 28px; font-size: 12.5px; }
+.btn.danger { color: var(--bad); }
+.btn.danger.arm { background: var(--bad); color: #fff; border-color: var(--bad); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; background: var(--surface); flex-wrap: wrap; }
+.seg button { border: 0; background: transparent; padding: 8px 14px; cursor: pointer; font-weight: 500; color: var(--muted); border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: 0; }
+.seg button.on { background: var(--accent); color: #fff; }
+.formgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.formgrid .wide { grid-column: span 2; }
+.entry-foot { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; position: sticky; bottom: 0; background: var(--surface); border-top: 1px solid var(--line); padding: 12px 16px; margin: 0 -16px -16px; border-radius: 0 0 8px 8px; }
+.sumline { display: flex; gap: 18px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.sumline b { font-size: 16px; }
+.warnbox { background: var(--warn-bg); color: var(--warn); border-radius: 6px; padding: 8px 12px; font-size: 13px; }
+.errbox { background: var(--bad-bg); color: var(--bad); border-radius: 6px; padding: 8px 12px; font-size: 13px; }
+.editing { background: var(--accent-soft); color: var(--accent); border-radius: 6px; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+
+/* Chart */
+.chart-wrap { position: relative; }
+.chart-wrap svg { display: block; width: 100%; height: auto; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--line); box-shadow: 0 4px 14px rgba(0,0,0,.14); border-radius: 6px; padding: 8px 10px; font-size: 12.5px; display: none; z-index: 5; min-width: 150px; }
+.tip .r { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
+
+/* Lists / cards */
+.list { display: flex; flex-direction: column; }
+.li { display: flex; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.li:last-child { border-bottom: 0; }
+.li .t { font-weight: 500; }
+.empty { padding: 26px; text-align: center; color: var(--muted); }
+details.lines summary { cursor: pointer; color: var(--accent); font-size: 12.5px; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 8px; z-index: 50; display: none; max-width: 90vw; }
+.toast.on { display: block; }
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: none; align-items: flex-start; justify-content: center; z-index: 40; padding: 40px 16px; overflow-y: auto; }
+.overlay.on { display: flex; }
+.dialog { background: var(--surface); border-radius: 10px; padding: 20px; width: min(760px, 100%); display: flex; flex-direction: column; gap: 14px; }
+.dialog .acts { display: flex; justify-content: flex-end; gap: 10px; }
+.notice { background: var(--surface); border: 1px dashed var(--line); padding: 14px 16px; border-radius: 8px; color: var(--muted); }
+
+@media (max-width: 1000px) {
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid2 { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) {
+  nav.tabs { display: none; }
+  header.top { padding-bottom: 10px; }
+  .brand h1 { font-size: 20px; }
+  nav.bottom { display: flex; position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface); border-top: 1px solid var(--line); z-index: 30; padding-bottom: env(safe-area-inset-bottom); }
+  nav.bottom a { flex: 1; text-align: center; padding: 10px 4px 9px; text-decoration: none; color: var(--muted); font-size: 12px; font-weight: 600; border-top: 3px solid transparent; }
+  nav.bottom a.on { color: var(--accent); border-top-color: var(--accent); }
+  main { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
+  .desk-only { display: none !important; }
+  .hide-sm { display: none; }
+  .tile .big { font-size: 28px; }
+  .tiles { gap: 10px; }
+  .tile { padding: 12px; }
+  th, td { padding: 6px 5px; }
+}
+@media (min-width: 761px) { .mob-only { display: none !important; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <div>
+      <h1>Crash Barrier Production &amp; Dispatch</h1>
+      <div class="sub" id="subline">Ashapura plant</div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="chip" id="sync" type="button" title="Refresh now"><span class="dot"></span><span id="synctext">Connecting</span></button>
+      <button class="chip" id="signout" type="button" title="Change access key">Key: <span id="rolename">-</span></button>
+    </div>
+  </div>
+  <nav class="tabs" id="tabs">
+    <a href="#dashboard" data-v="dashboard">Dashboard</a>
+    <a href="#entry" data-v="entry" class="w-only">Data Entry</a>
+    <a href="#stock" data-v="stock">Stock</a>
+    <a href="#orders" data-v="orders">Client POs</a>
+    <a href="#register" data-v="register">Register</a>
+    <a href="#items" data-v="items" class="w-only">Item Master</a>
+  </nav>
+</header>
+
+<main>
+  <div id="loadnote" class="notice">Loading plant data...</div>
+
+  <!-- DASHBOARD -->
+  <section class="view" id="v-dashboard">
+    <div class="bar">
+      <div class="left"><h2 id="dash-title">Dashboard</h2></div>
+      <div class="right"><label class="f" for="dash-date">Report date<input type="date" id="dash-date"></label></div>
+    </div>
+    <div class="tiles" id="tiles"></div>
+    <div class="grid2">
+      <div class="panel">
+        <div class="panel-head"><h3>Daily movement, last 30 days (MT)</h3>
+          <div class="legend"><span><i style="background:var(--s1)"></i>Black forming</span><span><i style="background:var(--s2)"></i>Galvanized</span><span><i style="background:var(--s3)"></i>Dispatched</span></div>
+        </div>
+        <div class="chart-wrap" id="chart"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Stock by system</h3><span class="small muted" id="sys-asof"></span></div>
+        <div class="tw"><table id="sys-table"></table></div>
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="panel">
+        <div class="panel-head"><h3>Open client POs</h3><a href="#orders" class="small">All POs</a></div>
+        <div class="tw"><table id="dash-po"></table></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Shortage against site requirement</h3><a href="#stock" class="small">Full stock</a></div>
+        <div id="dash-short" class="list"></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>Recent dispatches</h3><a href="#register" class="small">Register</a></div>
+      <div class="tw"><table id="dash-disp"></table></div>
+    </div>
+  </section>
+
+  <!-- ENTRY -->
+  <section class="view" id="v-entry">
+    <div class="bar">
+      <div class="left"><h2>Data Entry</h2></div>
+      <div class="right">
+        <div class="seg" id="etype">
+          <button data-t="black" class="on">Black Forming</button>
+          <button data-t="galv">Galvanizing</button>
+          <button data-t="dispatch">Dispatch</button>
+          <button data-t="receipt">Bought-out Receipt</button>
+          <button data-t="adjust">Stock Adjustment</button>
+        </div>
+      </div>
+    </div>
+    <div class="panel" id="entry-panel">
+      <div id="edit-banner"></div>
+      <p class="small muted" id="etype-help" style="margin:0 0 12px"></p>
+      <div class="formgrid" id="ehead"></div>
+      <div class="tw" style="margin-top:14px"><table id="egrid"></table></div>
+      <div class="entry-foot">
+        <div class="sumline" id="esum"></div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <span id="ewarn"></span>
+          <button class="btn" id="eclear" type="button">Clear</button>
+          <button class="btn pri" id="esave" type="button">Save entry</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STOCK -->
+  <section class="view" id="v-stock">
+    <div class="bar">
+      <div class="left"><h2>Item-wise Stock</h2></div>
+      <div class="right">
+        <label class="f" for="stock-sys">System<select id="stock-sys"></select></label>
+        <label class="f" for="stock-date">Stock as on<input type="date" id="stock-date"></label>
+      </div>
+    </div>
+    <div class="panel"><div class="tw"><table id="stock-table"></table></div>
+      <p class="small muted" style="margin:10px 0 0">Cover = Black + GI stock minus site requirement. Site requirement is maintained in the Item Master (Items tab of the Google Sheet).</p></div>
+  </section>
+
+  <!-- ORDERS -->
+  <section class="view" id="v-orders">
+    <div class="bar">
+      <div class="left"><h2>Client Purchase Orders</h2></div>
+      <div class="right">
+        <div class="seg" id="po-filter"><button data-f="open" class="on">Open</button><button data-f="all">All</button></div>
+        <button class="btn pri w-only desk-only" id="po-add" type="button">Add PO</button>
+      </div>
+    </div>
+    <div class="panel"><div class="tw"><table id="po-table"></table></div></div>
+    <div class="panel" id="po-detail" style="display:none"></div>
+  </section>
+
+  <!-- REGISTER -->
+  <section class="view" id="v-register">
+    <div class="bar">
+      <div class="left"><h2>Entry Register</h2></div>
+      <div class="right">
+        <label class="f" for="reg-type">Type<select id="reg-type">
+          <option value="">All entries</option><option value="black">Black forming</option><option value="galv">Galvanizing</option>
+          <option value="dispatch">Dispatch</option><option value="receipt">Bought-out receipt</option><option value="adjust">Stock adjustment</option></select></label>
+        <label class="f" for="reg-month">Month<input type="month" id="reg-month"></label>
+        <label class="f" for="reg-q">Search<input type="text" id="reg-q" placeholder="Invoice, vehicle, client"></label>
+      </div>
+    </div>
+    <div class="panel"><div class="sumline small" id="reg-sum" style="margin-bottom:10px"></div><div class="tw"><table id="reg-table"></table></div></div>
+  </section>
+
+  <!-- ITEMS -->
+  <section class="view" id="v-items">
+    <div class="bar">
+      <div class="left"><h2>Item Master</h2></div>
+      <div class="right">
+        <label class="f" for="open-date">Opening stock as on<input type="date" id="open-date"></label>
+        <button class="btn" id="open-save" type="button">Save date</button>
+        <button class="btn pri" id="item-add" type="button">Add item</button>
+      </div>
+    </div>
+    <div class="panel">
+      <p class="small muted" style="margin:0 0 10px">Unit weights in kg per piece. Nos/Km is the conversion factor from your Stock Master. Mtr/No is used to work out running metres for Mtr POs (beams = 4). Opening stock is the closing stock on the opening date; all entries dated after it move the stock.</p>
+      <div class="tw"><table id="item-table"></table></div>
+    </div>
+  </section>
+</main>
+
+<nav class="bottom" id="btabs">
+  <a href="#dashboard" data-v="dashboard">Dashboard</a>
+  <a href="#stock" data-v="stock">Stock</a>
+  <a href="#orders" data-v="orders">POs</a>
+  <a href="#register" data-v="register">Register</a>
+</nav>
+
+<div class="overlay" id="dlg"><div class="dialog" id="dlg-body" role="dialog" aria-modal="true"></div></div>
+<div class="toast" id="toast"></div>
+<div class="overlay" id="login"><form class="dialog" id="login-form" style="max-width:420px" autocomplete="off">
+  <h3>Open Crash Barrier app</h3>
+  <p class="small muted" style="margin:0">Enter the access key given to you. The entry key allows data entry on the computer; the view key is for monitoring on phones.</p>
+  <label class="f" for="login-key">Access key<input type="text" id="login-key" autocapitalize="off" spellcheck="false"></label>
+  <label class="f" for="login-name">Your name (shown on entries you make)<input type="text" id="login-name"></label>
+  <div id="login-err"></div>
+  <div class="acts"><button class="btn pri" type="submit" id="login-go">Open</button></div>
+</form></div>
+
+<script>
+(function () {
+  "use strict";
+  // Google Apps Script web app link (set once after deployment)
+  const API_URL = "https://script.google.com/macros/s/AKfycbxHB2XBnliFZ2h91Qmm4isZYkm_8zID-qhImlUoglKRMI0mEp97VuWq0VnfhLYGNzJbMg/exec";
+  // ---------- State ----------
+  const S = {
+    db: null, user: null, uid: null, canWrite: null,
+    items: new Map(), pos: new Map(), txns: [], settings: { openingDate: "2026-11-21", plant: "Ashapura", gstRate: 18 },
+    loaded: { items: false, pos: false, txns: false, settings: false },
+    names: {}, view: "dashboard",
+    etype: "black", editingId: null, poQtyTouched: false,
+    poFilter: "open", poSel: null
+  };
+  const TYPES = {
+    black: { label: "Black forming", pill: "p-black", help: "Black (ungalvanized) pieces formed today. Adds to Black stock." },
+    galv: { label: "Galvanizing", pill: "p-galv", help: "Pieces taken out of the HDG kettle. Moves stock from Black to GI." },
+    dispatch: { label: "Dispatch", pill: "p-disp", help: "Galvanized material loaded on a vehicle against an invoice. Reduces GI stock and counts against the PO balance." },
+    receipt: { label: "Bought-out receipt", pill: "p-rec", help: "Fasteners or other finished (GI) items received from a vendor. Adds to GI stock." },
+    adjust: { label: "Stock adjustment", pill: "p-adj", help: "Physical verification correction. Enter + or - quantities for Black and GI." }
+  };
+
+  // ---------- Helpers ----------
+  const $ = (s, r) => (r || document).querySelector(s);
+  const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
+  const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const nf0 = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 });
+  const nf2 = new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fN = (v) => nf0.format(Math.round(v || 0));
+  const fMT = (v) => nf2.format(v || 0);
+  const fRs = (v) => "Rs " + nf0.format(Math.round(v || 0));
+  const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const fD = (iso) => { if (!iso) return "-"; const [y, m, d] = iso.split("-"); return d + "-" + MON[+m - 1] + "-" + y; };
+  const pad = (n) => String(n).padStart(2, "0");
+  const isoOf = (dt) => dt.getFullYear() + "-" + pad(dt.getMonth() + 1) + "-" + pad(dt.getDate());
+  const today = () => isoOf(new Date());
+  const addDays = (iso, n) => { const [y, m, d] = iso.split("-").map(Number); return isoOf(new Date(y, m - 1, d + n)); };
+  const num = (v) => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
+  function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("on"), 3200); }
+  const itemList = () => Array.from(S.items.values()).sort((a, b) => (a.sno || 0) - (b.sno || 0));
+  const activeItems = () => itemList().filter(i => i.active !== false);
+  const systems = () => { const out = []; activeItems().forEach(i => { if (!out.includes(i.system)) out.push(i.system); }); return out; };
+  const it = (id) => S.items.get(id) || { name: "(deleted item " + id + ")", wtBlack: 0, wtGI: 0, perKm: 0, system: "-" };
+  const km = (i, nos) => (i.perKm > 0 ? nos / i.perKm : null);
+  const fKm = (v) => (v == null ? "-" : nf2.format(v));
+  const validTxns = () => S.txns.filter(t => t.date && t.date > S.settings.openingDate);
+
+  // ---------- Calculations ----------
+  function stockAsOn(asOn) {
+    const st = new Map();
+    itemList().forEach(i => st.set(i.id, { black: num(i.openBlack), gi: num(i.openGI) }));
+    const get = (id) => { if (!st.has(id)) st.set(id, { black: 0, gi: 0 }); return st.get(id); };
+    validTxns().forEach(t => {
+      if (asOn && t.date > asOn) return;
+      (t.lines || []).forEach(l => {
+        const s = get(l.item);
+        if (t.type === "black") s.black += num(l.nos);
+        else if (t.type === "galv") { s.black -= num(l.nos); s.gi += num(l.nos); }
+        else if (t.type === "receipt") s.gi += num(l.nos);
+        else if (t.type === "dispatch") s.gi -= num(l.nos);
+        else if (t.type === "adjust") { s.black += num(l.black); s.gi += num(l.gi); }
+      });
+    });
+    return st;
+  }
+  function txnMT(t) {
+    let mt = 0, nos = 0;
+    (t.lines || []).forEach(l => {
+      const i = it(l.item);
+      if (t.type === "adjust") { nos += num(l.black) + num(l.gi); mt += (num(l.black) * num(i.wtBlack) + num(l.gi) * num(i.wtGI)) / 1000; }
+      else { const w = t.type === "black" ? num(i.wtBlack) : num(i.wtGI); nos += num(l.nos); mt += num(l.nos) * w / 1000; }
+    });
+    return { mt, nos };
+  }
+  function dayAgg(from, to) {
+    const a = { black: 0, galv: 0, disp: 0, dispNos: 0, blackNos: 0, galvNos: 0, vehicles: 0, receipt: 0 };
+    validTxns().forEach(t => {
+      if (t.date < from || t.date > to) return;
+      const m = txnMT(t);
+      if (t.type === "black") { a.black += m.mt; a.blackNos += m.nos; }
+      else if (t.type === "galv") { a.galv += m.mt; a.galvNos += m.nos; }
+      else if (t.type === "dispatch") { a.disp += m.mt; a.dispNos += m.nos; a.vehicles += 1; }
+      else if (t.type === "receipt") a.receipt += m.mt;
+    });
+    return a;
+  }
+  function poStats(p) {
+    let app = 0, vehicles = 0;
+    validTxns().forEach(t => { if (t.type === "dispatch" && t.poId === p.id) { app += num(t.poQty); vehicles++; } });
+    const qty = num(p.qty), disp = num(p.openingDispatched) + app, bal = qty - disp;
+    const value = num(p.poValue) > 0 ? num(p.poValue) : qty * num(p.rate);
+    const unitVal = qty > 0 ? value / qty : 0;
+    const gst = 1 + num(S.settings.gstRate || 18) / 100;
+    return { qty, app, disp, bal, pct: qty > 0 ? Math.min(1, disp / qty) : 0, balVal: Math.max(0, bal) * unitVal * gst, unitVal, vehicles };
+  }
+  const poOpen = (p) => p.status !== "Closed" && poStats(p).bal > 0.5;
+  const poLabel = (p) => p.poNo + "  |  " + shortClient(p.client) + "  |  " + (p.location || "");
+  function shortClient(c) { c = String(c || ""); if (/prakash asphalt/i.test(c)) return "PATH"; return c.replace(/\b(private|pvt\.?|limited|ltd\.?)\b/gi, "").replace(/\s+/g, " ").replace(/[\s.,]+$/, "").trim(); }
+
+  // ---------- Sync status ----------
+  function setSync(state, text) { const c = $("#sync"); c.className = "chip " + (state || ""); $("#synctext").textContent = text; }
+
+  // ---------- Routing ----------
+  const VIEWS = ["dashboard", "entry", "stock", "orders", "register", "items"];
+  const isPhone = () => window.matchMedia("(max-width: 760px)").matches;
+  function route() {
+    let v = (location.hash || "").replace("#", "");
+    if (!VIEWS.includes(v)) v = "dashboard";
+    if ((v === "entry" || v === "items") && (!S.canWrite || isPhone())) v = "dashboard";
+    S.view = v;
+    $$(".view").forEach(el => el.classList.toggle("on", el.id === "v-" + v));
+    $$("nav a[data-v]").forEach(a => a.classList.toggle("on", a.dataset.v === v));
+    render();
+    window.scrollTo(0, 0);
+  }
+  window.addEventListener("hashchange", route);
+  window.addEventListener("resize", () => { if (S.view === "dashboard") renderChart(); });
+
+  function applyWriteMode() {
+    $$(".w-only").forEach(el => { el.style.display = S.canWrite ? "" : "none"; });
+  }
+
+  // ---------- Render ----------
+  function allLoaded() { return S.loaded.items && S.loaded.pos && S.loaded.txns; }
+  function render() {
+    $("#subline").textContent = (S.settings.plant || "Ashapura") + " plant  |  Opening stock as on " + fD(S.settings.openingDate);
+    if (!allLoaded()) return;
+    $("#loadnote").style.display = S.items.size ? "none" : "";
+    if (!S.items.size) { $("#loadnote").textContent = "The item master is empty. Open the Item Master on the computer to add items."; }
+    if (S.view === "dashboard") renderDashboard();
+    if (S.view === "stock") renderStock();
+    if (S.view === "orders") renderOrders();
+    if (S.view === "register") renderRegister();
+    if (S.view === "items") renderItems();
+    if (S.view === "entry") renderEntryStatic();
+  }
+
+  // ----- Dashboard -----
+  function renderDashboard() {
+    const d = $("#dash-date").value || today();
+    const mStart = d.slice(0, 8) + "01";
+    const day = dayAgg(d, d), mtd = dayAgg(mStart, d);
+    const st = stockAsOn(d);
+    let bMT = 0, gMT = 0, bNos = 0, gNos = 0;
+    itemList().forEach(i => { const s = st.get(i.id); bMT += s.black * num(i.wtBlack) / 1000; gMT += s.gi * num(i.wtGI) / 1000; bNos += s.black; gNos += s.gi; });
+    $("#dash-title").textContent = d === today() ? "Today, " + fD(d) : fD(d);
+    const tile = (lbl, color, big, a, b) => `<div class="tile" style="--tc:${color}"><span class="lbl">${lbl}</span><span class="big">${big}<small>MT</small></span><div class="row2">${a}</div><div class="row2">${b}</div></div>`;
+    $("#tiles").innerHTML =
+      tile("Black forming", "var(--s1)", fMT(day.black), `<span>Today</span><b>${fN(day.blackNos)} nos</b>`, `<span>Month to date</span><b>${fMT(mtd.black)} MT</b>`) +
+      tile("Galvanized", "var(--s2)", fMT(day.galv), `<span>Today</span><b>${fN(day.galvNos)} nos</b>`, `<span>Month to date</span><b>${fMT(mtd.galv)} MT</b>`) +
+      tile("Dispatched", "var(--s3)", fMT(day.disp), `<span>Vehicles today</span><b>${fN(day.vehicles)}</b>`, `<span>Month to date</span><b>${fMT(mtd.disp)} MT, ${fN(mtd.vehicles)} veh</b>`) +
+      tile("Stock in plant", "var(--hi)", fMT(bMT + gMT), `<span>GI ready</span><b>${fMT(gMT)} MT</b>`, `<span>Black (to galvanize)</span><b>${fMT(bMT)} MT</b>`);
+    renderChart();
+    // system table
+    $("#sys-asof").textContent = "as on " + fD(d);
+    const rows = systems().map(sys => {
+      let b = 0, g = 0, beamKm = 0, hasBeam = false;
+      activeItems().filter(i => i.system === sys).forEach(i => {
+        const s = st.get(i.id); b += s.black * num(i.wtBlack) / 1000; g += s.gi * num(i.wtGI) / 1000;
+        if (num(i.mtrPerNo) > 0 && i.perKm > 0) { hasBeam = true; beamKm += s.gi / i.perKm; }
+      });
+      return `<tr><td>${esc(sys)}</td><td class="n">${fMT(b)}</td><td class="n">${fMT(g)}</td><td class="n hide-sm">${fMT(b + g)}</td><td class="n">${hasBeam ? fMT(beamKm) : "-"}</td></tr>`;
+    }).join("");
+    $("#sys-table").innerHTML = `<thead><tr><th>System</th><th class="n">Black MT</th><th class="n">GI MT</th><th class="n hide-sm">Total MT</th><th class="n">GI beam Km</th></tr></thead><tbody>${rows}<tr class="tot"><td>Total</td><td class="n">${fMT(bMT)}</td><td class="n">${fMT(gMT)}</td><td class="n hide-sm">${fMT(bMT + gMT)}</td><td></td></tr></tbody>`;
+    // POs
+    const open = Array.from(S.pos.values()).filter(poOpen).sort((a, b) => poStats(b).balVal - poStats(a).balVal);
+    $("#dash-po").innerHTML = open.length ? `<thead><tr><th>Client / location</th><th class="n">Balance</th><th class="hide-sm">Progress</th><th class="n">Bal. value</th></tr></thead><tbody>` + open.map(p => {
+      const s = poStats(p);
+      return `<tr><td><div>${esc(shortClient(p.client))}</div><div class="small muted">${esc(p.location || "")}  |  ${esc(p.product || "")}</div></td><td class="n">${fN(s.bal)} <span class="small muted">${esc(p.unit)}</span></td><td class="hide-sm"><div class="prog" title="${Math.round(s.pct * 100)}% dispatched"><i style="width:${s.pct * 100}%"></i></div><div class="small muted">${Math.round(s.pct * 100)}%</div></td><td class="n">${fRs(s.balVal)}</td></tr>`;
+    }).join("") + `</tbody>` : `<tbody><tr><td class="empty">No open POs.</td></tr></tbody>`;
+    // shortages
+    const sh = activeItems().filter(i => num(i.siteReq) > 0).map(i => { const s = st.get(i.id); return { i, cover: s.black + s.gi - num(i.siteReq), gi: s.gi }; }).filter(x => x.cover < 0).sort((a, b) => a.cover * num(a.i.wtGI) - b.cover * num(b.i.wtGI));
+    $("#dash-short").innerHTML = sh.length ? sh.map(x => `<div class="li"><div><div class="t">${esc(x.i.name)}</div><div class="small muted">${esc(x.i.system)}  |  Required ${fN(x.i.siteReq)} nos</div></div><div class="num"><span class="pill p-bad">Short ${fN(-x.cover)} nos</span><div class="small muted">${fMT(-x.cover * num(x.i.wtGI) / 1000)} MT</div></div></div>`).join("") : `<div class="empty">No item is short against site requirement.</div>`;
+    // recent dispatches
+    const disp = validTxns().filter(t => t.type === "dispatch" && t.date <= d).sort((a, b) => (b.date + (b.at || "")).localeCompare(a.date + (a.at || ""))).slice(0, 8);
+    $("#dash-disp").innerHTML = disp.length ? `<thead><tr><th>Date</th><th>Invoice</th><th>Client / location</th><th class="hide-sm">Vehicle</th><th class="n">Nos</th><th class="n">MT</th></tr></thead><tbody>` + disp.map(t => {
+      const m = txnMT(t);
+      return `<tr><td>${fD(t.date)}</td><td>${esc(t.invoice || "-")}</td><td>${esc(shortClient(t.client))}<div class="small muted">${esc([t.location, t.subLocation].filter(Boolean).join(", "))}</div></td><td class="hide-sm">${esc(t.vehicle || "-")}</td><td class="n">${fN(m.nos)}</td><td class="n">${fMT(m.mt)}</td></tr>`;
+    }).join("") + `</tbody>` : `<tbody><tr><td class="empty">No dispatch entered after the opening date yet.</td></tr></tbody>`;
+  }
+
+  function renderChart() {
+    const host = $("#chart"); if (!host || S.view !== "dashboard") return;
+    const end = $("#dash-date").value || today();
+    const days = []; for (let k = 29; k >= 0; k--) days.push(addDays(end, -k));
+    const data = days.map(d => { const a = dayAgg(d, d); return { d, v: [a.black, a.galv, a.disp] }; });
+    const W = Math.max(320, host.clientWidth || 640), H = 230, padL = 44, padR = 8, padT = 10, padB = 26;
+    const max = Math.max(1, ...data.flatMap(x => x.v));
+    const step = niceStep(max / 4), top = Math.ceil(max / step) * step;
+    const iw = W - padL - padR, ih = H - padT - padB, gw = iw / days.length;
+    const bw = Math.max(2, Math.min(9, (gw - 4) / 3 - 1));
+    const y = (v) => padT + ih - (v / top) * ih;
+    let g = "";
+    for (let v = 0; v <= top + 1e-9; v += step) {
+      g += `<line x1="${padL}" x2="${W - padR}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)" stroke-width="1"/>`;
+      g += `<text x="${padL - 6}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="var(--muted)">${nf0.format(v)}</text>`;
+    }
+    const cols = ["var(--s1)", "var(--s2)", "var(--s3)"];
+    data.forEach((x, k) => {
+      const x0 = padL + k * gw + (gw - (bw * 3 + 2)) / 2;
+      x.v.forEach((v, s) => {
+        if (v <= 0) return;
+        const h = Math.max(1.5, (v / top) * ih), yy = padT + ih - h, r = Math.min(3, bw / 2, h);
+        const xx = x0 + s * (bw + 1);
+        g += `<path d="M${xx},${padT + ih}V${yy + r}Q${xx},${yy} ${xx + r},${yy}H${xx + bw - r}Q${xx + bw},${yy} ${xx + bw},${yy + r}V${padT + ih}Z" fill="${cols[s]}"/>`;
+      });
+      if (k % 5 === 4 || k === data.length - 1) {
+        const [, m, dd] = x.d.split("-");
+        g += `<text x="${padL + k * gw + gw / 2}" y="${H - 8}" text-anchor="middle" font-size="11" fill="var(--muted)">${+dd} ${MON[+m - 1]}</text>`;
+      }
+      g += `<rect class="hit" data-k="${k}" x="${padL + k * gw}" y="${padT}" width="${gw}" height="${ih}" fill="transparent"/>`;
+    });
+    g += `<line x1="${padL}" x2="${W - padR}" y1="${padT + ih}" y2="${padT + ih}" stroke="var(--muted)" stroke-width="1"/>`;
+    host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily black forming, galvanizing and dispatch in MT for the 30 days to ${fD(end)}">${g}</svg><div class="tip" id="ctip"></div>`;
+    const tip = $("#ctip");
+    $$("rect.hit", host).forEach(r => {
+      r.addEventListener("mouseenter", () => {
+        const x = data[+r.dataset.k];
+        tip.innerHTML = `<b>${fD(x.d)}</b><div class="r"><span>Black forming</span><span>${fMT(x.v[0])} MT</span></div><div class="r"><span>Galvanized</span><span>${fMT(x.v[1])} MT</span></div><div class="r"><span>Dispatched</span><span>${fMT(x.v[2])} MT</span></div>`;
+        tip.style.display = "block";
+        const bx = (+r.getAttribute("x")) / W * host.clientWidth;
+        tip.style.left = Math.min(host.clientWidth - 170, Math.max(0, bx - 60)) + "px"; tip.style.top = "8px";
+        r.style.fill = "color-mix(in srgb, var(--accent) 10%, transparent)";
+      });
+      r.addEventListener("mouseleave", () => { tip.style.display = "none"; r.style.fill = ""; });
+      r.addEventListener("click", () => { r.dispatchEvent(new Event("mouseenter")); });
+    });
+  }
+  function niceStep(raw) { const p = Math.pow(10, Math.floor(Math.log10(raw || 1))); const f = raw / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p; }
+
+  // ----- Stock -----
+  function renderStock() {
+    const sel = $("#stock-sys"), cur = sel.value;
+    sel.innerHTML = `<option value="">All systems</option>` + systems().map(s => `<option ${s === cur ? "selected" : ""}>${esc(s)}</option>`).join("");
+    const d = $("#stock-date").value || today();
+    const st = stockAsOn(d);
+    const sys = sel.value;
+    let html = `<thead><tr><th>Item</th><th class="n">Black nos</th><th class="n hide-sm">Black MT</th><th class="n">GI nos</th><th class="n">GI MT</th><th class="n hide-sm">GI Km</th><th class="n hide-sm">Total MT</th><th class="n hide-sm">Site req. nos</th><th>Cover</th></tr></thead><tbody>`;
+    const T = { b: 0, g: 0 };
+    (sys ? [sys] : systems()).forEach(s => {
+      html += `<tr class="grp"><td colspan="9">${esc(s)}</td></tr>`;
+      activeItems().filter(i => i.system === s).forEach(i => {
+        const x = st.get(i.id), bm = x.black * num(i.wtBlack) / 1000, gm = x.gi * num(i.wtGI) / 1000; T.b += bm; T.g += gm;
+        const req = num(i.siteReq), cover = x.black + x.gi - req;
+        const pill = req <= 0 ? `<span class="pill p-mute">No req.</span>` : cover >= 0 ? (x.gi >= req ? `<span class="pill p-good">OK</span>` : `<span class="pill p-warn">Galvanize ${fN(req - x.gi)}</span>`) : `<span class="pill p-bad">Short ${fN(-cover)}</span>`;
+        html += `<tr><td>${esc(i.name)}${i.boughtOut ? ` <span class="small muted">(bought-out)</span>` : ""}</td><td class="n">${fN(x.black)}</td><td class="n hide-sm">${fMT(bm)}</td><td class="n">${fN(x.gi)}</td><td class="n">${fMT(gm)}</td><td class="n hide-sm">${fKm(km(i, x.gi))}</td><td class="n hide-sm">${fMT(bm + gm)}</td><td class="n hide-sm">${req ? fN(req) : "-"}</td><td>${pill}</td></tr>`;
+      });
+    });
+    html += `<tr class="tot"><td>Total${sys ? " (" + esc(sys) + ")" : ""}</td><td></td><td class="n hide-sm">${fMT(T.b)}</td><td></td><td class="n">${fMT(T.g)}</td><td class="hide-sm"></td><td class="n hide-sm">${fMT(T.b + T.g)}</td><td class="hide-sm"></td><td></td></tr></tbody>`;
+    $("#stock-table").innerHTML = html;
+  }
+
+  // ----- Orders -----
+  function renderOrders() {
+    const list = Array.from(S.pos.values()).sort((a, b) => (b.poDate || "").localeCompare(a.poDate || ""));
+    const show = S.poFilter === "open" ? list.filter(poOpen) : list;
+    const canEdit = !!S.canWrite && !isPhone();
+    let html = `<thead><tr><th>Client</th><th>Location</th><th class="hide-sm">PO No. / date</th><th class="hide-sm">Product</th><th class="n">PO qty</th><th class="n">Dispatched</th><th class="n">Balance</th><th class="hide-sm">Progress</th><th class="n">Bal. value incl. GST</th>${canEdit ? "<th></th>" : ""}</tr></thead><tbody>`;
+    if (!show.length) html += `<tr><td colspan="10" class="empty">No ${S.poFilter === "open" ? "open " : ""}POs.</td></tr>`;
+    show.forEach(p => {
+      const s = poStats(p);
+      const st = p.status === "Closed" ? `<span class="pill p-mute">Closed</span>` : s.bal <= 0.5 ? `<span class="pill p-good">Completed</span>` : "";
+      html += `<tr data-po="${esc(p.id)}" style="cursor:pointer"><td>${esc(shortClient(p.client))} ${st}</td><td>${esc(p.location || "")}</td><td class="hide-sm">${esc(p.poNo)}<div class="small muted">${fD(p.poDate)}</div></td><td class="hide-sm">${esc(p.product || "")}</td><td class="n">${fN(s.qty)} <span class="small muted">${esc(p.unit)}</span></td><td class="n">${fN(s.disp)}</td><td class="n"><b>${fN(s.bal)}</b></td><td class="hide-sm"><div class="prog"><i style="width:${s.pct * 100}%"></i></div><div class="small muted">${Math.round(s.pct * 100)}%</div></td><td class="n">${fRs(s.balVal)}</td>${canEdit ? `<td><button class="btn sm" data-edit-po="${esc(p.id)}" type="button">Edit</button></td>` : ""}</tr>`;
+    });
+    const tot = show.reduce((a, p) => a + poStats(p).balVal, 0);
+    html += `<tr class="tot"><td colspan="8">Total balance value</td><td class="n">${fRs(tot)}</td>${canEdit ? "<td></td>" : ""}</tr></tbody>`;
+    $("#po-table").innerHTML = html;
+    $$("#po-table tr[data-po]").forEach(tr => tr.addEventListener("click", (e) => { if (e.target.closest("button")) return; S.poSel = tr.dataset.po; renderPoDetail(); }));
+    $$("#po-table [data-edit-po]").forEach(b => b.addEventListener("click", () => openPoDialog(b.dataset.editPo)));
+    renderPoDetail();
+  }
+  function renderPoDetail() {
+    const box = $("#po-detail"); const p = S.pos.get(S.poSel);
+    if (!p) { box.style.display = "none"; return; }
+    const s = poStats(p);
+    const ds = validTxns().filter(t => t.type === "dispatch" && t.poId === p.id).sort((a, b) => b.date.localeCompare(a.date));
+    box.style.display = "";
+    box.innerHTML = `<div class="panel-head"><h3>${esc(p.poNo)}, ${esc(shortClient(p.client))} (${esc(p.location || "")})</h3><button class="btn sm" id="po-close" type="button">Close</button></div>
+      <div class="sumline small"><span>PO qty <b>${fN(s.qty)}</b> ${esc(p.unit)}</span><span>Dispatched before ${fD(S.settings.openingDate)} <b>${fN(p.openingDispatched)}</b></span><span>Dispatched in app <b>${fN(s.app)}</b></span><span>Balance <b>${fN(s.bal)}</b></span><span>Rate <b>${fRs(s.unitVal)}</b>/${esc(p.unit)}</span></div>
+      <div class="tw" style="margin-top:10px"><table><thead><tr><th>Date</th><th>Invoice</th><th class="hide-sm">Vehicle</th><th class="hide-sm">Sub-location</th><th class="n">Qty (${esc(p.unit)})</th><th class="n">MT</th></tr></thead><tbody>${ds.length ? ds.map(t => `<tr><td>${fD(t.date)}</td><td>${esc(t.invoice)}</td><td class="hide-sm">${esc(t.vehicle || "-")}</td><td class="hide-sm">${esc(t.subLocation || "-")}</td><td class="n">${fN(t.poQty)}</td><td class="n">${fMT(txnMT(t).mt)}</td></tr>`).join("") : `<tr><td colspan="6" class="empty">No dispatch entered against this PO in the app yet.</td></tr>`}</tbody></table></div>`;
+    $("#po-close").addEventListener("click", () => { S.poSel = null; renderPoDetail(); });
+  }
+  function openPoDialog(id) {
+    const p = id ? S.pos.get(id) : { status: "Ongoing", unit: "Mtr", poDate: today(), openingDispatched: 0 };
+    const prods = Array.from(new Set(systems().concat(["Multiple Crash Barrier Items"], Array.from(S.pos.values()).map(x => x.product).filter(Boolean))));
+    $("#dlg-body").innerHTML = `<h3>${id ? "Edit PO " + esc(p.poNo) : "Add client PO"}</h3>
+      <div class="formgrid">
+        <label class="f wide" for="po-client">Client<input type="text" id="po-client" value="${esc(p.client || "")}"></label>
+        <label class="f" for="po-loc">Location / project<input type="text" id="po-loc" value="${esc(p.location || "")}"></label>
+        <label class="f" for="po-no">PO No.<input type="text" id="po-no" value="${esc(p.poNo || "")}"></label>
+        <label class="f" for="po-date">PO date<input type="date" id="po-date" value="${esc(p.poDate || "")}"></label>
+        <label class="f" for="po-prod">Product<input type="text" id="po-prod" list="po-prods" value="${esc(p.product || "")}"><datalist id="po-prods">${prods.map(x => `<option value="${esc(x)}">`).join("")}</datalist></label>
+        <label class="f" for="po-unit">Unit<select id="po-unit">${["Mtr", "Kg", "nos"].map(u => `<option ${u === p.unit ? "selected" : ""}>${u}</option>`).join("")}</select></label>
+        <label class="f" for="po-qty">PO qty<input type="number" id="po-qty" value="${esc(p.qty ?? "")}"></label>
+        <label class="f" for="po-rate">Rate (Rs per unit, basic)<input type="number" step="any" id="po-rate" value="${esc(p.rate ?? "")}"></label>
+        <label class="f" for="po-value">Basic PO value (only if items have mixed rates)<input type="number" step="any" id="po-value" value="${esc(p.poValue ?? "")}"></label>
+        <label class="f" for="po-open">Dispatched before ${fD(S.settings.openingDate)}<input type="number" id="po-open" value="${esc(p.openingDispatched ?? 0)}"></label>
+        <label class="f" for="po-status">Status<select id="po-status">${["Ongoing", "Closed"].map(u => `<option ${u === p.status ? "selected" : ""}>${u}</option>`).join("")}</select></label>
+      </div>
+      <div id="po-err"></div>
+      <div class="acts">${id ? `<button class="btn danger" id="po-del" type="button">Delete PO</button>` : ""}<span style="flex:1"></span><button class="btn" id="po-cancel" type="button">Cancel</button><button class="btn pri" id="po-save" type="button">Save PO</button></div>`;
+    $("#dlg").classList.add("on");
+    $("#po-cancel").onclick = closeDlg;
+    $("#po-save").onclick = async () => {
+      const doc = {
+        client: $("#po-client").value.trim(), location: $("#po-loc").value.trim(), poNo: $("#po-no").value.trim(), poDate: $("#po-date").value,
+        product: $("#po-prod").value.trim(), unit: $("#po-unit").value, qty: num($("#po-qty").value), rate: num($("#po-rate").value),
+        openingDispatched: num($("#po-open").value), status: $("#po-status").value
+      };
+      if ($("#po-value").value !== "") doc.poValue = num($("#po-value").value);
+      if (!doc.client || !doc.poNo || !doc.qty) { $("#po-err").innerHTML = `<div class="errbox">Enter the client, PO No. and PO qty.</div>`; return; }
+      try {
+        await apiPost("savePo", Object.assign({ id: id || "" }, doc));
+        closeDlg(); toast("PO saved");
+      } catch (e) { $("#po-err").innerHTML = `<div class="errbox">${esc(writeErr(e))}</div>`; }
+    };
+    if (id) armDelete($("#po-del"), async () => {
+      if (validTxns().some(t => t.poId === id)) { $("#po-err").innerHTML = `<div class="errbox">Dispatches are booked against this PO. Set its status to Closed instead.</div>`; return; }
+      try { await apiPost("deletePo", { id }); closeDlg(); toast("PO deleted"); } catch (e) { $("#po-err").innerHTML = `<div class="errbox">${esc(writeErr(e))}</div>`; }
+    });
+  }
+  function closeDlg() { $("#dlg").classList.remove("on"); $("#dlg-body").innerHTML = ""; }
+  $("#dlg").addEventListener("click", (e) => { if (e.target.id === "dlg") closeDlg(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDlg(); });
+  function armDelete(btn, fn) {
+    btn.addEventListener("click", () => {
+      if (btn.classList.contains("arm")) { btn.classList.remove("arm"); fn(); return; }
+      btn.classList.add("arm"); const old = btn.textContent; btn.textContent = "Click again to delete";
+      setTimeout(() => { btn.classList.remove("arm"); btn.textContent = old; }, 4000);
+    });
+  }
+  function writeErr(e) {
+    const c = e && e.code;
+    if (c === "no_edit_rights") return "This device has the view-only key, so it cannot change data. Use the entry key.";
+    if (c === "network") return "Could not reach the Google Sheet. Check the internet connection and save again.";
+    return "The Google Sheet did not accept the save (" + (c || "error") + "). Try again.";
+  }
+
+  // ----- Register -----
+  function renderRegister() {
+    const ty = $("#reg-type").value, mo = $("#reg-month").value, q = $("#reg-q").value.trim().toLowerCase();
+    const list = validTxns().filter(t => (!ty || t.type === ty) && (!mo || t.date.startsWith(mo)) &&
+      (!q || [t.invoice, t.vehicle, t.client, t.location, t.subLocation, t.remarks, t.poNo].join(" ").toLowerCase().includes(q)))
+      .sort((a, b) => (b.date + (b.at || "")).localeCompare(a.date + (a.at || "")));
+    const canEdit = !!S.canWrite && !isPhone();
+    const sums = {}; list.forEach(t => { const m = txnMT(t); sums[t.type] = (sums[t.type] || 0) + m.mt; });
+    $("#reg-sum").innerHTML = `<span>${fN(list.length)} entries</span>` + Object.keys(TYPES).filter(k => sums[k]).map(k => `<span>${TYPES[k].label}: <b>${fMT(sums[k])}</b> MT</span>`).join("");
+    let html = `<thead><tr><th>Date</th><th>Type</th><th>Details</th><th class="n">Nos</th><th class="n">MT</th><th class="hide-sm">Entered by</th>${canEdit ? "<th></th>" : ""}</tr></thead><tbody>`;
+    if (!list.length) html += `<tr><td colspan="7" class="empty">No entries for this selection.</td></tr>`;
+    list.forEach(t => {
+      const m = txnMT(t);
+      let det = "";
+      if (t.type === "dispatch") det = `<b>${esc(t.invoice || "-")}</b>  |  ${esc(shortClient(t.client))}${t.location ? ", " + esc(t.location) : ""}${t.subLocation ? ", " + esc(t.subLocation) : ""}<div class="small muted">${esc(t.vehicle || "")}${t.poNo ? "  |  PO " + esc(t.poNo) + ": " + fN(t.poQty) + " " + esc(t.poUnit || "") : ""}${t.weighbridgeKg ? "  |  WB " + fN(t.weighbridgeKg) + " kg" : ""}</div>`;
+      else det = esc(t.remarks || (t.ref ? t.ref : "")) || `<span class="muted">${(t.lines || []).length} item line(s)</span>`;
+      if (t.type === "receipt" && t.ref) det = `<b>${esc(t.ref)}</b>${t.remarks ? "  |  " + esc(t.remarks) : ""}`;
+      const lines = (t.lines || []).map(l => { const i = it(l.item); return t.type === "adjust" ? `<li>${esc(i.name)}: Black ${l.black > 0 ? "+" : ""}${fN(l.black)}, GI ${l.gi > 0 ? "+" : ""}${fN(l.gi)}</li>` : `<li>${esc(i.name)}: ${fN(l.nos)} nos</li>`; }).join("");
+      html += `<tr><td>${fD(t.date)}</td><td><span class="pill ${TYPES[t.type] ? TYPES[t.type].pill : ""}">${esc(TYPES[t.type] ? TYPES[t.type].label : t.type)}</span></td><td>${det}<details class="lines"><summary>Items</summary><ul class="small" style="margin:4px 0;padding-left:18px">${lines}</ul></details></td><td class="n">${fN(m.nos)}</td><td class="n">${fMT(m.mt)}</td><td class="hide-sm small muted">${esc(t.by || "")}</td>${canEdit ? `<td style="white-space:nowrap"><button class="btn sm" data-edit="${esc(t.id)}" type="button">Edit</button> <button class="btn sm danger" data-del="${esc(t.id)}" type="button">Delete</button></td>` : ""}</tr>`;
+    });
+    $("#reg-table").innerHTML = html + "</tbody>";
+    $$("#reg-table [data-edit]").forEach(b => b.addEventListener("click", () => startEdit(b.dataset.edit)));
+    $$("#reg-table [data-del]").forEach(b => armDelete(b, async () => { try { await apiPost("deleteTxn", { id: b.dataset.del }); toast("Entry deleted"); } catch (e) { toast(writeErr(e)); } }));
+  }
+  // ----- Entry -----
+  function entryItems(type) { return activeItems().filter(i => (type === "black" || type === "galv") ? !i.boughtOut : true); }
+  function renderEntryStatic() {
+    $$("#etype button").forEach(b => b.classList.toggle("on", b.dataset.t === S.etype));
+    $("#etype-help").textContent = TYPES[S.etype].help;
+    $("#edit-banner").innerHTML = S.editingId ? `<div class="editing" style="margin-bottom:12px"><span>Editing an existing ${esc(TYPES[S.etype].label.toLowerCase())} entry. Saving will replace it.</span><button class="btn sm" id="cancel-edit" type="button">Cancel edit</button></div>` : "";
+    if (S.editingId) $("#cancel-edit").onclick = () => { S.editingId = null; buildEntry(); };
+    if (!$("#egrid").dataset.built || $("#egrid").dataset.built !== S.etype + "|" + S.items.size + "|" + (S.editingId || "")) buildEntry(true);
+    else updateEntryCalc();
+  }
+  function headField(id, label, input, wide) { return `<label class="f${wide ? " wide" : ""}" for="${id}">${label}${input}</label>`; }
+  function buildEntry(keep) {
+    const t = S.etype, same = S.builtFor === t + "|" + (S.editingId || ""), d = keep && same ? collectEntry() : null;
+    const src = (S.editingId && S.txns.find(x => x.id === S.editingId)) || null;
+    const v = (k, def) => (d && d[k] != null ? d[k] : src && src[k] != null ? src[k] : def);
+    let h = headField("e-date", "Date", `<input type="date" id="e-date" value="${esc(v("date", today()))}">`);
+    if (t === "black" || t === "galv") {
+      h += headField("e-shift", "Shift", `<select id="e-shift">${["Day", "Night", "General"].map(s => `<option ${s === v("shift", "Day") ? "selected" : ""}>${s}</option>`).join("")}</select>`);
+      h += headField("e-remarks", "Remarks", `<input type="text" id="e-remarks" value="${esc(v("remarks", ""))}">`, true);
+    } else if (t === "dispatch") {
+      const pos = Array.from(S.pos.values()).filter(p => poOpen(p) || p.id === v("poId", "")).sort((a, b) => shortClient(a.client).localeCompare(shortClient(b.client)));
+      h += headField("e-invoice", "Invoice No.", `<input type="text" id="e-invoice" value="${esc(v("invoice", ""))}" placeholder="RSL/MP/...">`);
+      h += headField("e-po", "Client PO", `<select id="e-po"><option value="">No PO (direct sale)</option>${pos.map(p => `<option value="${esc(p.id)}" ${p.id === v("poId", "") ? "selected" : ""}>${esc(poLabel(p))}</option>`).join("")}</select>`, true);
+      h += headField("e-client", "Client", `<input type="text" id="e-client" value="${esc(v("client", ""))}">`);
+      h += headField("e-loc", "Location / project", `<input type="text" id="e-loc" value="${esc(v("location", ""))}">`);
+      h += headField("e-sub", "Sub-location / site", `<input type="text" id="e-sub" value="${esc(v("subLocation", ""))}">`);
+      h += headField("e-veh", "Vehicle No.", `<input type="text" id="e-veh" value="${esc(v("vehicle", ""))}" placeholder="MP09AB1234">`);
+      h += headField("e-wb", "Weighbridge net wt (kg)", `<input type="number" id="e-wb" value="${esc(v("weighbridgeKg", ""))}">`);
+      h += headField("e-poqty", `Qty vs PO <span id="e-pounit"></span>`, `<input type="number" step="any" id="e-poqty" value="${esc(v("poQty", ""))}">`);
+      h += headField("e-remarks", "Remarks", `<input type="text" id="e-remarks" value="${esc(v("remarks", ""))}">`);
+    } else if (t === "receipt") {
+      h += headField("e-ref", "Vendor / GRN / challan", `<input type="text" id="e-ref" value="${esc(v("ref", ""))}">`, true);
+      h += headField("e-remarks", "Remarks", `<input type="text" id="e-remarks" value="${esc(v("remarks", ""))}">`, true);
+    } else {
+      h += headField("e-remarks", "Reason (physical verification etc.)", `<input type="text" id="e-remarks" value="${esc(v("remarks", ""))}">`, true);
+    }
+    $("#ehead").innerHTML = h;
+    // grid
+    const lines = {}; ((d && d.lines) || (src && src.lines) || []).forEach(l => { lines[l.item] = l; });
+    const st = stockAsOn();
+    const avlLbl = t === "black" ? "Black stock" : t === "galv" ? "Black available" : t === "dispatch" ? "GI available" : "GI stock";
+    let g = t === "adjust"
+      ? `<thead><tr><th>Item</th><th class="n">Black stock</th><th class="n">Black +/-</th><th class="n">GI stock</th><th class="n">GI +/-</th><th class="n">Kg</th></tr></thead><tbody>`
+      : `<thead><tr><th>Item</th><th class="n">${avlLbl}</th><th class="n">Quantity (nos)</th><th class="n">Kg</th><th class="n">MT</th><th class="n">Km</th>${t === "dispatch" ? `<th class="n">Mtr</th>` : ""}</tr></thead><tbody>`;
+    let sys = null;
+    entryItems(t).forEach(i => {
+      if (i.system !== sys) { sys = i.system; g += `<tr class="grp"><td colspan="7">${esc(sys)}</td></tr>`; }
+      const s = st.get(i.id) || { black: 0, gi: 0 }, l = lines[i.id] || {};
+      // when editing, show availability excluding this entry's own effect
+      let adjB = 0, adjG = 0;
+      if (src) { const ol = (src.lines || []).find(x => x.item === i.id); if (ol) { if (src.type === "black") adjB = -num(ol.nos); if (src.type === "galv") { adjB = num(ol.nos); adjG = -num(ol.nos); } if (src.type === "dispatch") adjG = num(ol.nos); if (src.type === "receipt") adjG = -num(ol.nos); if (src.type === "adjust") { adjB = -num(ol.black); adjG = -num(ol.gi); } } }
+      const sb = s.black + adjB, sg = s.gi + adjG;
+      if (t === "adjust") {
+        g += `<tr data-i="${i.id}"><td>${esc(i.name)}</td><td class="n">${fN(sb)}</td><td class="n"><input class="q" type="number" step="1" data-k="black" aria-label="${esc(i.name)} black adjustment" value="${l.black ? esc(l.black) : ""}"></td><td class="n">${fN(sg)}</td><td class="n"><input class="q" type="number" step="1" data-k="gi" aria-label="${esc(i.name)} GI adjustment" value="${l.gi ? esc(l.gi) : ""}"></td><td class="n" data-c="kg">-</td></tr>`;
+      } else {
+        const avl = t === "black" || t === "galv" ? sb : sg;
+        g += `<tr data-i="${i.id}" data-avl="${avl}"><td>${esc(i.name)}</td><td class="n">${fN(avl)}</td><td class="n"><input class="q" type="number" min="0" step="1" data-k="nos" aria-label="${esc(i.name)} quantity" value="${l.nos ? esc(l.nos) : ""}"></td><td class="n" data-c="kg">-</td><td class="n" data-c="mt">-</td><td class="n" data-c="km">-</td>${t === "dispatch" ? `<td class="n" data-c="mtr">-</td>` : ""}</tr>`;
+      }
+    });
+    $("#egrid").innerHTML = g + "</tbody>";
+    $("#egrid").dataset.built = t + "|" + S.items.size + "|" + (S.editingId || "");
+    S.builtFor = t + "|" + (S.editingId || "");
+    $$("#egrid input.q").forEach(inp => inp.addEventListener("input", updateEntryCalc));
+    $$("#ehead input, #ehead select").forEach(inp => inp.addEventListener("input", updateEntryCalc));
+    if (t === "dispatch") {
+      S.poQtyTouched = !!(src && src.poQty != null) || !!(d && d.poQtyTouched);
+      $("#e-po").addEventListener("change", () => {
+        const p = S.pos.get($("#e-po").value);
+        if (p) { $("#e-client").value = p.client || ""; $("#e-loc").value = p.location || ""; }
+        S.poQtyTouched = false; updateEntryCalc();
+      });
+      $("#e-poqty").addEventListener("input", () => { S.poQtyTouched = $("#e-poqty").value !== ""; });
+    }
+    renderEntryStatic2();
+    updateEntryCalc();
+  }
+  function refreshAvail() {
+    const st = stockAsOn(), src = (S.editingId && S.txns.find(x => x.id === S.editingId)) || null, t = S.etype;
+    $$("#egrid tr[data-i]").forEach(tr => {
+      const s = st.get(tr.dataset.i) || { black: 0, gi: 0 }; let b = s.black, g = s.gi;
+      const ol = src && (src.lines || []).find(x => x.item === tr.dataset.i);
+      if (ol) { if (src.type === "black") b -= num(ol.nos); if (src.type === "galv") { b += num(ol.nos); g -= num(ol.nos); } if (src.type === "dispatch") g += num(ol.nos); if (src.type === "receipt") g -= num(ol.nos); if (src.type === "adjust") { b -= num(ol.black); g -= num(ol.gi); } }
+      const cells = tr.children;
+      if (t === "adjust") { cells[1].textContent = fN(b); cells[3].textContent = fN(g); }
+      else { const avl = t === "dispatch" || t === "receipt" ? g : b; tr.dataset.avl = avl; cells[1].textContent = fN(avl); }
+    });
+    updateEntryCalc();
+  }
+  function renderEntryStatic2() {
+    $$("#etype button").forEach(b => b.classList.toggle("on", b.dataset.t === S.etype));
+    $("#etype-help").textContent = TYPES[S.etype].help;
+  }
+  function collectEntry() {
+    if (!$("#e-date")) return null;
+    const t = S.etype, val = (id) => ($("#" + id) ? $("#" + id).value : undefined);
+    const d = { date: val("e-date"), remarks: (val("e-remarks") || "").trim() };
+    if (t === "black" || t === "galv") d.shift = val("e-shift");
+    if (t === "dispatch") Object.assign(d, { invoice: (val("e-invoice") || "").trim(), poId: val("e-po") || "", client: (val("e-client") || "").trim(), location: (val("e-loc") || "").trim(), subLocation: (val("e-sub") || "").trim(), vehicle: (val("e-veh") || "").trim().toUpperCase(), weighbridgeKg: val("e-wb") === "" ? null : num(val("e-wb")), poQty: val("e-poqty") === "" ? null : num(val("e-poqty")), poQtyTouched: S.poQtyTouched });
+    if (t === "receipt") d.ref = (val("e-ref") || "").trim();
+    d.lines = [];
+    $$("#egrid tr[data-i]").forEach(tr => {
+      if (t === "adjust") {
+        const b = num($("input[data-k=black]", tr).value), g = num($("input[data-k=gi]", tr).value);
+        if (b || g) d.lines.push({ item: tr.dataset.i, black: Math.round(b), gi: Math.round(g) });
+      } else {
+        const n = num($("input[data-k=nos]", tr).value);
+        if (n) d.lines.push({ item: tr.dataset.i, nos: Math.round(n) });
+      }
+    });
+    return d;
+  }
+  function updateEntryCalc() {
+    const t = S.etype; let tk = 0, tn = 0, tmtr = 0, over = 0;
+    $$("#egrid tr[data-i]").forEach(tr => {
+      const i = it(tr.dataset.i);
+      if (t === "adjust") {
+        const bi = $("input[data-k=black]", tr), gi = $("input[data-k=gi]", tr);
+        const b = num(bi.value), g = num(gi.value); bi.classList.toggle("filled", !!b); gi.classList.toggle("filled", !!g);
+        const kg = b * num(i.wtBlack) + g * num(i.wtGI); tk += kg; tn += b + g;
+        $("[data-c=kg]", tr).textContent = (b || g) ? fN(kg) : "-";
+        return;
+      }
+      const inp = $("input[data-k=nos]", tr), n = num(inp.value), w = t === "black" ? num(i.wtBlack) : num(i.wtGI);
+      inp.classList.toggle("filled", n > 0);
+      const isOver = (t === "galv" || t === "dispatch") && n > num(tr.dataset.avl);
+      inp.classList.toggle("over", isOver); if (isOver) over++;
+      const kg = n * w; tk += kg; tn += n; const mtr = n * num(i.mtrPerNo); tmtr += mtr;
+      $("[data-c=kg]", tr).textContent = n ? fN(kg) : "-";
+      $("[data-c=mt]", tr).textContent = n ? fMT(kg / 1000) : "-";
+      $("[data-c=km]", tr).textContent = n ? fKm(km(i, n)) : "-";
+      const mc = $("[data-c=mtr]", tr); if (mc) mc.textContent = n && mtr ? fN(mtr) : "-";
+    });
+    let s = `<span>Items <b>${fN($$("#egrid input.q.filled").length)}</b></span><span>Nos <b>${fN(tn)}</b></span><span>Weight <b>${fMT(tk / 1000)}</b> MT (${fN(tk)} kg)</span>`;
+    if (t === "dispatch") {
+      const p = S.pos.get($("#e-po") ? $("#e-po").value : "");
+      const unit = p ? p.unit : "";
+      $("#e-pounit").textContent = p ? "(" + unit + ")" : "";
+      if (p && !S.poQtyTouched) {
+        const wb = num($("#e-wb").value);
+        const auto = /kg/i.test(unit) ? (wb || Math.round(tk)) : /mtr|m$/i.test(unit) ? tmtr : tn;
+        $("#e-poqty").value = auto ? Math.round(auto) : "";
+      }
+      if (tmtr) s += `<span>Running metres <b>${fN(tmtr)}</b></span>`;
+      const wb = num($("#e-wb").value);
+      if (wb && tk) s += `<span>Weighbridge vs theoretical <b>${(wb - tk >= 0 ? "+" : "") + fN(wb - tk)}</b> kg</span>`;
+      if (p) { const bal = poStats(p).bal + (S.editingId ? num((S.txns.find(x => x.id === S.editingId) || {}).poQty) : 0); s += `<span>PO balance after this <b>${fN(bal - num($("#e-poqty").value))}</b> ${esc(unit)}</span>`; }
+    }
+    $("#esum").innerHTML = s;
+    $("#ewarn").innerHTML = over ? `<span class="pill p-bad">${over} item(s) above available stock</span>` : "";
+  }
+  async function saveEntry() {
+    const d = collectEntry(); if (!d) return;
+    const t = S.etype, errs = [];
+    if (!d.date) errs.push("Enter the date.");
+    if (d.date && d.date <= S.settings.openingDate) errs.push("The date must be after the opening stock date (" + fD(S.settings.openingDate) + ").");
+    if (!d.lines.length) errs.push("Enter a quantity for at least one item.");
+    if (t === "dispatch") { if (!d.invoice) errs.push("Enter the invoice number."); if (!d.client) errs.push("Enter the client."); if (d.poId && !(d.poQty > 0)) errs.push("Enter the quantity against the PO."); }
+    if (errs.length) { toast(errs.join(" ")); return; }
+    const doc = { type: t, date: d.date, remarks: d.remarks || "", lines: d.lines, at: new Date().toISOString() };
+    if (d.shift) doc.shift = d.shift;
+    if (t === "receipt") doc.ref = d.ref || "";
+    if (t === "dispatch") {
+      const p = S.pos.get(d.poId);
+      Object.assign(doc, { invoice: d.invoice, client: d.client, location: d.location, subLocation: d.subLocation, vehicle: d.vehicle, poId: d.poId || "", poNo: p ? p.poNo : "", poUnit: p ? p.unit : "", poQty: p ? num(d.poQty) : 0 });
+      if (d.weighbridgeKg) doc.weighbridgeKg = d.weighbridgeKg;
+    }
+    const prev = S.editingId ? S.txns.find(x => x.id === S.editingId) : null;
+    doc.by = prev ? (prev.by || S.userName || "") : (S.userName || "");
+    const btn = $("#esave"); btn.disabled = true; btn.textContent = "Saving...";
+    try {
+      await apiPost("saveTxn", Object.assign({ id: prev ? prev.id : "" }, doc));
+      toast(TYPES[t].label + " saved for " + fD(d.date));
+      const keepDate = d.date; S.editingId = null; buildEntry(false); $("#e-date").value = keepDate;
+    } catch (e) { toast(writeErr(e)); }
+    btn.disabled = false; btn.textContent = "Save entry";
+  }
+  function startEdit(id) {
+    const t = S.txns.find(x => x.id === id); if (!t) return;
+    S.etype = t.type; S.editingId = id; location.hash = "#entry";
+    setTimeout(() => buildEntry(false), 0);
+  }
+  $$("#etype button").forEach(b => b.addEventListener("click", () => { if (S.editingId) S.editingId = null; S.etype = b.dataset.t; buildEntry(false); renderEntryStatic(); }));
+  $("#esave").addEventListener("click", saveEntry);
+  $("#eclear").addEventListener("click", () => { S.editingId = null; buildEntry(false); renderEntryStatic(); });
+
+  // ----- Items -----
+  const ITEM_COLS = [["name", "Item", "text", 240], ["system", "System", "text", 150], ["wtBlack", "Black kg/no", "num", 90], ["wtGI", "GI kg/no", "num", 90], ["perKm", "Nos/Km", "num", 80], ["mtrPerNo", "Mtr/No", "num", 70], ["openBlack", "Opening Black", "num", 100], ["openGI", "Opening GI", "num", 100], ["siteReq", "Site req. nos", "num", 100]];
+  function renderItems() {
+    $("#open-date").value = S.settings.openingDate || "";
+    let h = `<thead><tr><th>#</th>${ITEM_COLS.map(c => `<th class="${c[2] === "num" ? "n" : ""}">${c[1]}</th>`).join("")}<th>Bought-out</th><th>Active</th><th></th></tr></thead><tbody>`;
+    itemList().forEach(i => {
+      h += `<tr data-id="${esc(i.id)}"><td class="muted">${esc(i.sno)}</td>${ITEM_COLS.map(c => `<td><input ${c[2] === "num" ? `type="number" step="any" class="q"` : `type="text"`} data-f="${c[0]}" aria-label="${esc(c[1])}" style="width:${c[3]}px" value="${esc(i[c[0]] ?? "")}"></td>`).join("")}<td><input type="checkbox" data-f="boughtOut" aria-label="Bought-out" ${i.boughtOut ? "checked" : ""}></td><td><input type="checkbox" data-f="active" aria-label="Active" ${i.active !== false ? "checked" : ""}></td><td><button class="btn sm pri" data-save style="visibility:hidden" type="button">Save</button></td></tr>`;
+    });
+    $("#item-table").innerHTML = h + "</tbody>";
+    $$("#item-table tr[data-id]").forEach(tr => {
+      const btn = $("[data-save]", tr);
+      $$("input", tr).forEach(inp => inp.addEventListener("input", () => { btn.style.visibility = "visible"; }));
+      $$("input", tr).forEach(inp => inp.addEventListener("change", () => { btn.style.visibility = "visible"; }));
+      btn.addEventListener("click", async () => {
+        const id = tr.dataset.id, old = S.items.get(id) || {}, doc = Object.assign({}, old);
+        delete doc.id;
+        $$("input[data-f]", tr).forEach(inp => { const f = inp.dataset.f; doc[f] = inp.type === "checkbox" ? inp.checked : inp.type === "number" ? num(inp.value) : inp.value.trim(); });
+        try { await apiPost("saveItem", Object.assign({ id }, doc)); btn.style.visibility = "hidden"; toast("Item saved"); } catch (e) { toast(writeErr(e)); }
+      });
+    });
+  }
+  $("#item-add").addEventListener("click", async () => {
+    const max = itemList().reduce((a, i) => Math.max(a, num(i.sno)), 0);
+    try { await apiPost("saveItem", { sno: max + 1, system: "New system", name: "New item", wtGI: 0, wtBlack: 0, perKm: 0, mtrPerNo: 0, openBlack: 0, openGI: 0, siteReq: 0, boughtOut: false, active: true }); toast("Item added at the bottom. Fill in its details and save."); }
+    catch (e) { toast(writeErr(e)); }
+  });
+  $("#open-save").addEventListener("click", async () => {
+    const v = $("#open-date").value; if (!v) return;
+    try { await apiPost("saveSettings", { openingDate: v }); toast("Opening date saved"); } catch (e) { toast(writeErr(e)); }
+  });
+
+  // ----- Filters -----
+  $("#dash-date").addEventListener("change", () => renderDashboard());
+  $("#stock-date").addEventListener("change", renderStock);
+  $("#stock-sys").addEventListener("change", renderStock);
+  ["reg-type", "reg-month", "reg-q"].forEach(id => $("#" + id).addEventListener("input", renderRegister));
+  $$("#po-filter button").forEach(b => b.addEventListener("click", () => { S.poFilter = b.dataset.f; $$("#po-filter button").forEach(x => x.classList.toggle("on", x === b)); renderOrders(); }));
+  $("#po-add").addEventListener("click", () => openPoDialog(null));
+
+  // ---------- Boot ----------
+  $("#dash-date").value = today(); $("#stock-date").value = today(); $("#reg-month").value = today().slice(0, 7);
+  applyWriteMode(); route();
+
+  let renderQueued = false;
+  function queueRender() {
+    if (renderQueued) return; renderQueued = true;
+    requestAnimationFrame(() => {
+      renderQueued = false;
+      // keep an in-progress entry form: only refresh availability numbers, never wipe typed quantities
+      if (S.view === "entry") { const g = $("#egrid"); if (g.dataset.built === S.etype + "|" + S.items.size + "|" + (S.editingId || "")) refreshAvail(); else renderEntryStatic(); }
+      else render();
+      if (!allLoaded()) return;
+      $("#loadnote").style.display = S.items.size ? "none" : "";
+    });
+  }
+
+  // ---------- Google Sheet link ----------
+  function readLS(k) { try { return localStorage.getItem(k) || ""; } catch (e) { return ""; } }
+  function writeLS(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
+  S.key = readLS("cbpd_key"); S.userName = readLS("cbpd_name");
+  let lastOk = null, fetching = false;
+  async function apiGet() {
+    const r = await fetch(API_URL + "?key=" + encodeURIComponent(S.key) + "&t=" + Date.now(), { redirect: "follow" });
+    return r.json();
+  }
+  async function apiPost(action, data) {
+    if (!API_URL) throw { code: "no_server" };
+    let j;
+    try {
+      const r = await fetch(API_URL, { method: "POST", redirect: "follow", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ key: S.key, action, data }) });
+      j = await r.json();
+    } catch (e) { throw { code: "network" }; }
+    if (!j.ok) throw { code: j.error || "server" };
+    refresh();
+    return j.result;
+  }
+  function applySnapshot(j) {
+    S.items = new Map((j.items || []).map(i => [i.id, i]));
+    S.pos = new Map((j.pos || []).map(p => [p.id, p]));
+    S.txns = j.txns || [];
+    S.settings = Object.assign({ openingDate: "2026-11-21", plant: "Ashapura", gstRate: 18 }, j.settings || {});
+    S.loaded = { items: true, pos: true, txns: true, settings: true };
+    S.canWrite = j.role === "edit";
+    $("#rolename").textContent = j.role === "edit" ? "Entry" : "View only";
+    applyWriteMode();
+  }
+  const hhmm = (d) => pad(d.getHours()) + ":" + pad(d.getMinutes());
+  async function refresh() {
+    if (!API_URL) { setSync("err", "Server not set"); $("#loadnote").textContent = "This app has not been linked to its Google Sheet yet."; return; }
+    if (!S.key) { showLogin(); return; }
+    if (fetching) return; fetching = true;
+    setSync("", lastOk ? "Updating" : "Connecting");
+    try {
+      const j = await apiGet();
+      if (!j.ok) {
+        if (j.error === "bad_key") { writeLS("cbpd_key", null); S.key = ""; showLogin("That access key is not valid. Check it and try again."); }
+        else setSync("err", "Sheet error");
+        fetching = false; return;
+      }
+      applySnapshot(j); lastOk = new Date();
+      writeLS("cbpd_cache", JSON.stringify(j));
+      setSync("live", "Updated " + hhmm(lastOk));
+      const wasView = S.view; if ((wasView === "entry" || wasView === "items") && !S.canWrite) route(); else queueRender();
+    } catch (e) {
+      setSync("err", lastOk ? "Offline, data of " + hhmm(lastOk) : "Can't reach Google");
+      if (!S.items.size) $("#loadnote").textContent = "The Google Sheet can't be reached. Check the internet connection; the app retries every minute.";
+    }
+    fetching = false;
+  }
+  function showLogin(msg) {
+    $("#login").classList.add("on");
+    $("#login-name").value = S.userName || "";
+    $("#login-err").innerHTML = msg ? `<div class="errbox">${esc(msg)}</div>` : "";
+    setTimeout(() => $("#login-key").focus(), 50);
+  }
+  $("#login-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const k = $("#login-key").value.trim(); if (!k) return;
+    S.key = k; S.userName = $("#login-name").value.trim();
+    writeLS("cbpd_key", k); writeLS("cbpd_name", S.userName);
+    $("#login").classList.remove("on"); lastOk = null; refresh();
+  });
+  $("#sync").addEventListener("click", () => refresh());
+  $("#signout").addEventListener("click", () => showLogin());
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refresh(); });
+  setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 60000);
+
+  // instant start from the last copy on this device, then fetch fresh data
+  try { const c = JSON.parse(readLS("cbpd_cache") || "null"); if (c && c.ok && S.key) { applySnapshot(c); setSync("", "Saved copy"); } } catch (e) {}
+  route(); refresh();
+  if ("serviceWorker" in navigator && location.protocol === "https:") { navigator.serviceWorker.register("sw.js").catch(() => {}); }
+})();
+</script>
+</body>
+</html>
