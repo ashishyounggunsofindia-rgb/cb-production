@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-title" content="PEIPL Stock">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Tinos:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
 <style>
 /* Layout idea: plant control-room board. Summary tiles first, then stock and orders tables.
    Desktop = top tabs with data entry; phone = bottom tab bar, monitoring only. */
@@ -34,8 +34,8 @@
   --bad: #c22f2f;
   --bad-bg: #fbe3e3;
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;
-  --font-display: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
-  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Times New Roman", Tinos, Times, serif;
+  --font-body: "Times New Roman", Tinos, Times, serif;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -56,8 +56,8 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
-body { background: var(--bg); color: var(--ink); font: 14px/1.45 var(--font-body); -webkit-text-size-adjust: 100%; }
-h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing: .01em; margin: 0; text-wrap: balance; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.45 var(--font-body); -webkit-text-size-adjust: 100%; }
+h1, h2, h3 { font-family: var(--font-display); font-weight: 700; letter-spacing: .01em; margin: 0; text-wrap: balance; }
 h2 { font-size: 22px; }
 h3 { font-size: 18px; }
 .num, td.n, th.n { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
