@@ -349,15 +349,17 @@ details.lines summary { cursor: pointer; color: var(--accent); font-size: 12.5px
   <!-- ITEMS -->
   <section class="view" id="v-items">
     <div class="bar">
-      <div class="left"><h2>Item Master</h2></div>
+      <div class="left"><h2>Item Master</h2>
+        <label class="f" for="item-sys">System<select id="item-sys"></select></label>
+        <button class="btn pri" id="item-add" type="button">Add item</button>
+      </div>
       <div class="right">
         <label class="f" for="open-date">Opening stock as on<input type="date" id="open-date"></label>
         <button class="btn" id="open-save" type="button">Save date</button>
-        <button class="btn pri" id="item-add" type="button">Add item</button>
       </div>
     </div>
     <div class="panel">
-      <p class="small muted" style="margin:0 0 10px">Unit weights in kg per piece. Nos/Km is the conversion factor from your Stock Master. Mtr/No is used to work out running metres for Mtr POs (beams = 4). Opening stock is the closing stock on the opening date; all entries dated after it move the stock.</p>
+      <p class="small muted" style="margin:0 0 10px">Edit any cell and click Save on that row. Delete removes an item that has no entries yet; an item already used in entries cannot be deleted, so untick Active to hide it from entry screens and stock (its history stays). Unit weights in kg per piece. Nos/Km is the conversion factor from your Stock Master. Mtr/No is used to work out running metres for Mtr POs (beams = 4). Opening stock is the closing stock on the opening date; all entries dated after it move the stock.</p>
       <div class="tw"><table id="item-table"></table></div>
     </div>
   </section>
@@ -756,6 +758,8 @@ details.lines summary { cursor: pointer; color: var(--accent); font-size: 12.5px
     const c = e && e.code;
     if (c === "no_edit_rights") return "This device has the view-only key, so it cannot change data. Use the entry key.";
     if (c === "network") return "Could not reach the Google Sheet. Check the internet connection and save again.";
+    if (c === "item_has_entries") return "This item has entries, so it can't be deleted. Untick Active to hide it.";
+    if (c === "unknown_action") return "The Google Sheet link needs updating for this action. Tell Claude.";
     return "The Google Sheet did not accept the save (" + (c || "error") + "). Try again.";
   }
 
@@ -970,30 +974,77 @@ details.lines summary { cursor: pointer; color: var(--accent); font-size: 12.5px
 
   // ----- Items -----
   const ITEM_COLS = [["name", "Item", "text", 240], ["system", "System", "text", 150], ["wtBlack", "Black kg/no", "num", 90], ["wtGI", "GI kg/no", "num", 90], ["perKm", "Nos/Km", "num", 80], ["mtrPerNo", "Mtr/No", "num", 70], ["openBlack", "Opening Black", "num", 100], ["openGI", "Opening GI", "num", 100], ["siteReq", "Site req. nos", "num", 100]];
+  const allSystems = () => { const out = []; itemList().forEach(i => { if (!out.includes(i.system)) out.push(i.system); }); return out; };
+  function itemUse(id) { let n = 0; S.txns.forEach(t => (t.lines || []).forEach(l => { if (l.item === id) n++; })); return n; }
   function renderItems() {
     $("#open-date").value = S.settings.openingDate || "";
+    const sel = $("#item-sys"), list = allSystems();
+    let pick = S.itemSys == null ? (list[0] || "") : S.itemSys;
+    if (pick && !list.includes(pick)) pick = "";
+    sel.innerHTML = `<option value="">All systems</option>` + list.map(x => `<option ${x === pick ? "selected" : ""}>${esc(x)}</option>`).join("");
+    S.itemSys = pick;
+    const rows = itemList().filter(i => !pick || i.system === pick);
     let h = `<thead><tr><th>#</th>${ITEM_COLS.map(c => `<th class="${c[2] === "num" ? "n" : ""}">${c[1]}</th>`).join("")}<th>Bought-out</th><th>Active</th><th></th></tr></thead><tbody>`;
-    itemList().forEach(i => {
-      h += `<tr data-id="${esc(i.id)}"><td class="muted">${esc(i.sno)}</td>${ITEM_COLS.map(c => `<td><input ${c[2] === "num" ? `type="number" step="any" class="q"` : `type="text"`} data-f="${c[0]}" aria-label="${esc(c[1])}" style="width:${c[3]}px" value="${esc(i[c[0]] ?? "")}"></td>`).join("")}<td><input type="checkbox" data-f="boughtOut" aria-label="Bought-out" ${i.boughtOut ? "checked" : ""}></td><td><input type="checkbox" data-f="active" aria-label="Active" ${i.active !== false ? "checked" : ""}></td><td><button class="btn sm pri" data-save style="visibility:hidden" type="button">Save</button></td></tr>`;
+    if (!rows.length) h += `<tr><td colspan="13" class="empty">No items in this system yet. Use Add item.</td></tr>`;
+    rows.forEach((i, k) => {
+      const used = itemUse(i.id);
+      h += `<tr data-id="${esc(i.id)}"${i.active === false ? ' style="opacity:.55"' : ""}><td class="muted">${k + 1}</td>${ITEM_COLS.map(c => `<td><input ${c[2] === "num" ? `type="number" step="any" class="q"` : `type="text"`} data-f="${c[0]}" aria-label="${esc(c[1])}" style="width:${c[3]}px" value="${esc(i[c[0]] ?? "")}"></td>`).join("")}<td><input type="checkbox" data-f="boughtOut" aria-label="Bought-out" ${i.boughtOut ? "checked" : ""}></td><td><input type="checkbox" data-f="active" aria-label="Active" ${i.active !== false ? "checked" : ""}></td><td style="white-space:nowrap"><button class="btn sm pri" data-save style="visibility:hidden" type="button">Save</button> ${used ? `<span class="pill p-mute" title="Used in ${used} entry line(s). Untick Active to hide it.">In use</span>` : `<button class="btn sm danger" data-del type="button">Delete</button>`}</td></tr>`;
     });
     $("#item-table").innerHTML = h + "</tbody>";
     $$("#item-table tr[data-id]").forEach(tr => {
-      const btn = $("[data-save]", tr);
-      $$("input", tr).forEach(inp => inp.addEventListener("input", () => { btn.style.visibility = "visible"; }));
-      $$("input", tr).forEach(inp => inp.addEventListener("change", () => { btn.style.visibility = "visible"; }));
+      const btn = $("[data-save]", tr), id = tr.dataset.id;
+      $$("input", tr).forEach(inp => { inp.addEventListener("input", () => { btn.style.visibility = "visible"; }); inp.addEventListener("change", () => { btn.style.visibility = "visible"; }); });
       btn.addEventListener("click", async () => {
-        const id = tr.dataset.id, old = S.items.get(id) || {}, doc = Object.assign({}, old);
+        const old = S.items.get(id) || {}, doc = Object.assign({}, old);
         delete doc.id;
         $$("input[data-f]", tr).forEach(inp => { const f = inp.dataset.f; doc[f] = inp.type === "checkbox" ? inp.checked : inp.type === "number" ? num(inp.value) : inp.value.trim(); });
+        if (!doc.name || !doc.system) { toast("Item name and system cannot be blank."); return; }
+        btn.disabled = true; btn.textContent = "Saving...";
         try { await apiPost("saveItem", Object.assign({ id }, doc)); btn.style.visibility = "hidden"; toast("Item saved"); } catch (e) { toast(writeErr(e)); }
+        btn.disabled = false; btn.textContent = "Save";
+      });
+      const del = $("[data-del]", tr);
+      if (del) armDelete(del, async () => {
+        const it0 = S.items.get(id) || {};
+        try { await apiPost("deleteItem", { id }); toast("Deleted " + (it0.name || "item")); }
+        catch (e) { toast(e && e.code === "item_has_entries" ? "This item has entries, so it can't be deleted. Untick Active to hide it." : writeErr(e)); }
       });
     });
   }
-  $("#item-add").addEventListener("click", async () => {
-    const max = itemList().reduce((a, i) => Math.max(a, num(i.sno)), 0);
-    try { await apiPost("saveItem", { sno: max + 1, system: "New system", name: "New item", wtGI: 0, wtBlack: 0, perKm: 0, mtrPerNo: 0, openBlack: 0, openGI: 0, siteReq: 0, boughtOut: false, active: true }); toast("Item added at the bottom. Fill in its details and save."); }
-    catch (e) { toast(writeErr(e)); }
-  });
+  $("#item-sys").addEventListener("change", (e) => { S.itemSys = e.target.value; renderItems(); });
+  function openItemDialog() {
+    const sys = S.itemSys || "", list = allSystems();
+    $("#dlg-body").innerHTML = `<h3>Add item${sys ? " to " + esc(sys) : ""}</h3>
+      <div class="formgrid">
+        <label class="f wide" for="ni-sys">System (pick one, or type a new system name)<input type="text" id="ni-sys" list="ni-syslist" value="${esc(sys)}"><datalist id="ni-syslist">${list.map(x => `<option value="${esc(x)}">`).join("")}</datalist></label>
+        <label class="f wide" for="ni-name">Item name<input type="text" id="ni-name" placeholder="e.g. Post 2100 mm, 4.5 mm"></label>
+        <label class="f" for="ni-wb">Black weight (kg/no)<input type="number" step="any" id="ni-wb"></label>
+        <label class="f" for="ni-wg">GI weight (kg/no)<input type="number" step="any" id="ni-wg"></label>
+        <label class="f" for="ni-km">Nos per Km<input type="number" step="any" id="ni-km"></label>
+        <label class="f" for="ni-mtr">Mtr per No (beams = 4, others 0)<input type="number" step="any" id="ni-mtr" value="0"></label>
+        <label class="f" for="ni-ob">Opening Black (nos)<input type="number" id="ni-ob" value="0"></label>
+        <label class="f" for="ni-og">Opening GI (nos)<input type="number" id="ni-og" value="0"></label>
+        <label class="f" for="ni-req">Site requirement (nos)<input type="number" id="ni-req" value="0"></label>
+        <label class="f" for="ni-bo" style="flex-direction:row;align-items:center;gap:8px;margin-top:18px"><input type="checkbox" id="ni-bo"> Bought-out (fasteners etc.)</label>
+      </div>
+      <div id="ni-err"></div>
+      <div class="acts"><button class="btn" id="ni-cancel" type="button">Cancel</button><button class="btn pri" id="ni-save" type="button">Add item</button></div>`;
+    $("#dlg").classList.add("on"); setTimeout(() => $(sys ? "#ni-name" : "#ni-sys").focus(), 50);
+    $("#ni-cancel").onclick = closeDlg;
+    $("#ni-save").onclick = async () => {
+      const system = $("#ni-sys").value.trim(), name = $("#ni-name").value.trim();
+      const err = (m) => { $("#ni-err").innerHTML = `<div class="errbox">${esc(m)}</div>`; };
+      if (!system || !name) return err("Enter the system and the item name.");
+      if (itemList().some(i => i.system.toLowerCase() === system.toLowerCase() && i.name.toLowerCase() === name.toLowerCase())) return err("An item with this name already exists in " + system + ".");
+      const inSys = itemList().filter(i => i.system === system);
+      const sno = inSys.length ? Math.round((Math.max(...inSys.map(i => num(i.sno))) + 0.01) * 100) / 100 : Math.floor(itemList().reduce((a, i) => Math.max(a, num(i.sno)), 0)) + 1;
+      const doc = { sno, system, name, wtBlack: num($("#ni-wb").value), wtGI: num($("#ni-wg").value), perKm: num($("#ni-km").value), mtrPerNo: num($("#ni-mtr").value), openBlack: num($("#ni-ob").value), openGI: num($("#ni-og").value), siteReq: num($("#ni-req").value), boughtOut: $("#ni-bo").checked, active: true };
+      const b = $("#ni-save"); b.disabled = true; b.textContent = "Adding...";
+      try { await apiPost("saveItem", doc); S.itemSys = system; closeDlg(); toast(name + " added to " + system); }
+      catch (e) { err(writeErr(e)); b.disabled = false; b.textContent = "Add item"; }
+    };
+  }
+  $("#item-add").addEventListener("click", openItemDialog);
   $("#open-save").addEventListener("click", async () => {
     const v = $("#open-date").value; if (!v) return;
     try { await apiPost("saveSettings", { openingDate: v }); toast("Opening date saved"); } catch (e) { toast(writeErr(e)); }
@@ -1070,7 +1121,10 @@ details.lines summary { cursor: pointer; color: var(--accent); font-size: 12.5px
       applySnapshot(j); lastOk = new Date();
       writeLS("cbpd_cache", JSON.stringify(j));
       setSync("live", "Updated " + hhmm(lastOk));
-      const wasView = S.view; if ((wasView === "entry" || wasView === "items") && !S.canWrite) route(); else queueRender();
+      const h = (location.hash || "").replace("#", "");
+      if ((h === "entry" || h === "items") && S.view !== h) route();
+      else if ((S.view === "entry" || S.view === "items") && !S.canWrite) route();
+      else queueRender();
     } catch (e) {
       setSync("err", lastOk ? "Offline, data of " + hhmm(lastOk) : "Can't reach Google");
       if (!S.items.size) $("#loadnote").textContent = "The Google Sheet can't be reached. Check the internet connection; the app retries every minute.";
