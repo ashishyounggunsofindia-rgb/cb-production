@@ -1,5 +1,5 @@
 // Keeps the app shell on the device so it opens like installed software, even on a weak connection.
-const CACHE = "cbpd-v4";
+const CACHE = "cbpd-v5";
 const SHELL = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png", "./icon-32.png", "./logo-mark.png"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", (e) => {

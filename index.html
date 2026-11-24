@@ -106,6 +106,9 @@ main { padding: 18px max(16px, env(safe-area-inset-right)) 40px max(16px, env(sa
 .tile .row2 b { color: var(--ink); font-weight: 600; }
 
 .grid2 { display: grid; grid-template-columns: 1.35fr 1fr; gap: 18px; align-items: start; }
+.stack { display: flex; flex-direction: column; gap: 18px; }
+#sys-table td:first-child { min-width: 230px; }
+#sys-table td .small { white-space: nowrap; }
 
 /* Tables */
 .tw { overflow-x: auto; }
@@ -243,7 +246,7 @@ details.lines summary { cursor: pointer; color: var(--accent); font-size: 12.5px
       <div class="right"><label class="f" for="dash-date">Report date<input type="date" id="dash-date"></label></div>
     </div>
     <div class="tiles" id="tiles"></div>
-    <div class="grid2">
+    <div class="stack">
       <div class="panel">
         <div class="panel-head"><h3>Daily movement, last 30 days (MT)</h3>
           <div class="legend"><span><i style="background:var(--s1)"></i>Black forming</span><span><i style="background:var(--s2)"></i>Galvanized</span><span><i style="background:var(--s3)"></i>Dispatched</span></div>
@@ -251,7 +254,8 @@ details.lines summary { cursor: pointer; color: var(--accent); font-size: 12.5px
         <div class="chart-wrap" id="chart"></div>
       </div>
       <div class="panel">
-        <div class="panel-head"><h3>Stock by system</h3><span class="small muted" id="sys-asof"></span></div>
+        <div class="panel-head"><h3 id="sys-title">Stock by system</h3>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><label class="f" for="sys-pick" style="flex-direction:row;align-items:center;gap:6px">System<select id="sys-pick"><option value="">All systems</option></select></label><span class="small muted" id="sys-asof"></span></div></div>
         <div class="tw"><table id="sys-table"></table></div>
       </div>
     </div>
@@ -530,17 +534,9 @@ details.lines summary { cursor: pointer; color: var(--accent); font-size: 12.5px
       tile("Dispatched", "var(--s3)", fMT(day.disp), `<span>Vehicles today</span><b>${fN(day.vehicles)}</b>`, `<span>Month to date</span><b>${fMT(mtd.disp)} MT, ${fN(mtd.vehicles)} veh</b>`) +
       tile("Stock in plant", "var(--hi)", fMT(bMT + gMT), `<span>GI ready</span><b>${fMT(gMT)} MT</b>`, `<span>Black (to galvanize)</span><b>${fMT(bMT)} MT</b>`);
     renderChart();
-    // system table
+    // system table: all systems, or the components of one system
     $("#sys-asof").textContent = "as on " + fD(d);
-    const rows = systems().map(sys => {
-      let b = 0, g = 0, beamKm = 0, hasBeam = false;
-      activeItems().filter(i => i.system === sys).forEach(i => {
-        const s = st.get(i.id); b += s.black * num(i.wtBlack) / 1000; g += s.gi * num(i.wtGI) / 1000;
-        if (num(i.mtrPerNo) > 0 && i.perKm > 0) { hasBeam = true; beamKm += s.gi / i.perKm; }
-      });
-      return `<tr><td>${esc(sys)}</td><td class="n">${fMT(b)}</td><td class="n">${fMT(g)}</td><td class="n hide-sm">${fMT(b + g)}</td><td class="n">${hasBeam ? fMT(beamKm) : "-"}</td></tr>`;
-    }).join("");
-    $("#sys-table").innerHTML = `<thead><tr><th>System</th><th class="n">Black MT</th><th class="n">GI MT</th><th class="n hide-sm">Total MT</th><th class="n">GI beam Km</th></tr></thead><tbody>${rows}<tr class="tot"><td>Total</td><td class="n">${fMT(bMT)}</td><td class="n">${fMT(gMT)}</td><td class="n hide-sm">${fMT(bMT + gMT)}</td><td></td></tr></tbody>`;
+    renderSysTable(st);
     // POs
     const open = Array.from(S.pos.values()).filter(poOpen).sort((a, b) => poStats(b).balVal - poStats(a).balVal);
     $("#dash-po").innerHTML = open.length ? `<thead><tr><th>Client / location</th><th class="n">Balance</th><th class="hide-sm">Progress</th><th class="n">Bal. value</th></tr></thead><tbody>` + open.map(p => {
@@ -557,6 +553,54 @@ details.lines summary { cursor: pointer; color: var(--accent); font-size: 12.5px
       return `<tr><td>${fD(t.date)}</td><td>${esc(t.invoice || "-")}</td><td>${esc(shortClient(t.client))}<div class="small muted">${esc([t.location, t.subLocation].filter(Boolean).join(", "))}</div></td><td class="hide-sm">${esc(t.vehicle || "-")}</td><td class="n">${fN(m.nos)}</td><td class="n">${fMT(m.mt)}</td></tr>`;
     }).join("") + `</tbody>` : `<tbody><tr><td class="empty">No dispatch entered after the opening date yet.</td></tr></tbody>`;
   }
+
+  function renderSysTable(st) {
+    const sel = $("#sys-pick"), list = systems();
+    let pick = S.sysPick || "";
+    if (pick && !list.includes(pick)) pick = "";
+    sel.innerHTML = `<option value="">All systems</option>` + list.map(x => `<option ${x === pick ? "selected" : ""}>${esc(x)}</option>`).join("");
+    const kmOf = (i, nos) => (num(i.perKm) > 0 ? nos / num(i.perKm) : null);
+    const cell = (v, isKm) => `<td class="n">${isKm ? (v == null ? "-" : fMT(v)) : fMT(v)}</td>`;
+    const head = (first) => `<thead><tr><th>${first}</th><th class="n">Black MT</th><th class="n">Black Km</th><th class="n">GI MT</th><th class="n">GI Km</th><th class="n">Total MT</th><th class="n">Total Km</th></tr></thead>`;
+    // running Km of a system = Km of its beams (the rail length); other components are counted per item
+    function sysAgg(sys) {
+      const a = { bMT: 0, gMT: 0, bKm: null, gKm: null };
+      activeItems().filter(i => i.system === sys).forEach(i => {
+        const x = st.get(i.id) || { black: 0, gi: 0 };
+        a.bMT += x.black * num(i.wtBlack) / 1000; a.gMT += x.gi * num(i.wtGI) / 1000;
+        if (num(i.mtrPerNo) > 0 && num(i.perKm) > 0) { a.bKm = (a.bKm || 0) + x.black / i.perKm; a.gKm = (a.gKm || 0) + x.gi / i.perKm; }
+      });
+      return a;
+    }
+    const tKm = (a, b) => (a == null && b == null ? null : (a || 0) + (b || 0));
+    let html;
+    if (!pick) {
+      $("#sys-title").textContent = "Stock by system";
+      const T = { bMT: 0, gMT: 0, bKm: 0, gKm: 0 };
+      const rows = list.map(sys => {
+        const a = sysAgg(sys); T.bMT += a.bMT; T.gMT += a.gMT; T.bKm += a.bKm || 0; T.gKm += a.gKm || 0;
+        return `<tr data-sys="${esc(sys)}" style="cursor:pointer" title="Show components"><td><span style="color:var(--accent);text-decoration:underline;text-underline-offset:3px">${esc(sys)}</span></td>${cell(a.bMT)}${cell(a.bKm, 1)}${cell(a.gMT)}${cell(a.gKm, 1)}${cell(a.bMT + a.gMT)}${cell(tKm(a.bKm, a.gKm), 1)}</tr>`;
+      }).join("");
+      html = head("System") + `<tbody>${rows}<tr class="tot"><td>Total</td>${cell(T.bMT)}${cell(T.bKm, 1)}${cell(T.gMT)}${cell(T.gKm, 1)}${cell(T.bMT + T.gMT)}${cell(T.bKm + T.gKm, 1)}</tr></tbody>`;
+      html += `<caption style="caption-side:bottom;text-align:left" class="small muted">Km for a system = running Km of its beams. Click a system to see its components.</caption>`;
+    } else {
+      $("#sys-title").textContent = pick;
+      const items = activeItems().filter(i => i.system === pick);
+      const rows = items.map(i => {
+        const x = st.get(i.id) || { black: 0, gi: 0 };
+        const bMT = x.black * num(i.wtBlack) / 1000, gMT = x.gi * num(i.wtGI) / 1000;
+        const bKm = kmOf(i, x.black), gKm = kmOf(i, x.gi);
+        return `<tr><td>${esc(i.name)}<div class="small muted">Black ${fN(x.black)} nos  |  GI ${fN(x.gi)} nos</div></td>${cell(bMT)}${cell(bKm, 1)}${cell(gMT)}${cell(gKm, 1)}${cell(bMT + gMT)}${cell(tKm(bKm, gKm), 1)}</tr>`;
+      }).join("");
+      const a = sysAgg(pick);
+      html = head("Component") + `<tbody>${rows || `<tr><td colspan="7" class="empty">No components in this system.</td></tr>`}<tr class="tot"><td>Total ${esc(pick)}</td>${cell(a.bMT)}${cell(a.bKm, 1)}${cell(a.gMT)}${cell(a.gKm, 1)}${cell(a.bMT + a.gMT)}${cell(tKm(a.bKm, a.gKm), 1)}</tr></tbody>`;
+      html += `<caption style="caption-side:bottom;text-align:left" class="small muted">Component Km = nos / Nos per Km (Item Master). Total Km = running Km of the beams.</caption>`;
+    }
+    $("#sys-table").innerHTML = html;
+    $$("#sys-table tr[data-sys]").forEach(tr => tr.addEventListener("click", () => { S.sysPick = tr.dataset.sys; try { localStorage.setItem("cbpd_sys", S.sysPick); } catch (e) {} renderSysTable(st); }));
+  }
+  $("#sys-pick").addEventListener("change", (e) => { S.sysPick = e.target.value; try { localStorage.setItem("cbpd_sys", S.sysPick); } catch (e2) {} renderDashboard(); });
+  try { S.sysPick = localStorage.getItem("cbpd_sys") || ""; } catch (e) { S.sysPick = ""; }
 
   function renderChart() {
     const host = $("#chart"); if (!host || S.view !== "dashboard") return;
